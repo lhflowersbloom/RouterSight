@@ -1,10 +1,10 @@
 # RouterSight · 路由视界
 
-一个**不需要 Netdata** 的 Windows 桌面路由器监控小挂件。
+面向 Windows 桌面的轻量级路由器监控组件，**无需部署 Netdata**。
 
-它通过 **SSH 直接读取 iStoreOS / OpenWrt 路由器的 `/proc`**，在桌面上实时显示 CPU、内存、磁盘 I/O、**下载 / 上传速度**和 TCP/UDP 连接数。
+组件通过 **SSH 直读 iStoreOS / OpenWrt 的 `/proc`** 采集指标，在桌面实时呈现 CPU 使用率、内存占用、磁盘 I/O、**下载 / 上传速率**与 TCP/UDP 连接数。
 
-> 原版 NetSight 必须让路由器装好 iStoreOS 应用商店里的「NetData 系统监控」才能用，本项目把它改成了自己读 —— 路由器端**零安装、零常驻进程**。
+> 原版 NetSight 依赖路由器安装 iStoreOS 应用商店中的「NetData 系统监控」；本项目改为自行采集，路由器端**无需安装、无常驻进程**。
 
 ---
 
