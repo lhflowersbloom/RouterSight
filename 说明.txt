@@ -52,6 +52,17 @@ RouterSight 路由视界 v1.0 —— iStoreOS 路由器监控桌面组件
 7. 移除「显示/隐藏」与「锁定/解锁」两个托盘菜单项
    卡片始终可见、始终可拖动，这两个状态已无必要。
 
+8. 新增功能：密码框可见性切换
+   设置窗口的密码默认以掩码显示，点击右侧眼睛图标即可临时查看明文，便于核对输入；
+   再次点击恢复掩码。该开关仅影响显示，密码仍按原样保存在配置文件中。
+
+9. 修复：连接失败不再占满路由器的 SSH 会话
+   路由器（dropbear）能同时接受的未认证 SSH 连接数很小。旧版在连接失败时不释放
+   套接字，反复重试会把配额占满，之后即使密码正确也会报
+   「Error reading SSH protocol banner」。现改为失败时立即关闭连接，并在连续失败时
+   按 2 / 4 / 8 / 16 / 30 秒退避重试（成功即恢复原刷新频率）；该错误的提示也已改为
+   中文说明。
+
 ════════════════════════════════════════
 三、托盘菜单
 ════════════════════════════════════════
@@ -67,6 +78,8 @@ RouterSight 路由视界 v1.0 —— iStoreOS 路由器监控桌面组件
 · 命令行自检：RouterSight.exe --selftest
   将在同目录生成 RouterSight_selftest.txt，内含连接结果与各项指标；
   无法连接路由器时请先查看该文件。
+· 若提示「路由器未响应 SSH 握手（连接数已满或被限流）」，等待约 30 秒即可恢复；
+  本版已修复导致该现象的套接字泄漏，正常情况下不会再出现。
 · 配置文件缺失的新开关（edge_hide / click_through 等）在启动时按默认值补齐，
   不会覆盖已保存的其他设置。
 
@@ -83,5 +96,6 @@ RouterSight 路由视界 v1.0 —— iStoreOS 路由器监控桌面组件
 源文件   ：RouterSight.py + routersight_router.py
 打包     ：python build.py（PyInstaller 6.22.3，Python 3.12）
 界面预览 ：ui_preview.py（离屏渲染设置窗口）、render_widget.py（离屏渲染卡片）
-功能自测 ：smoke_test.py（取数 + 各卡片文本）、edge_test.py（靠边隐藏几何 + 鼠标穿透样式）
+功能自测 ：smoke_test.py（取数 + 各卡片文本）、edge_test.py（靠边隐藏几何 + 鼠标穿透样式）、
+           leak_test.py（失败连接不残留套接字）、recover_test.py（错误密码后仍可连接）
 依赖     ：PyQt5 5.15.11、paramiko、cryptography
