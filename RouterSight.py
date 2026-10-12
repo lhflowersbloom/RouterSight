@@ -60,7 +60,7 @@ from urllib.parse import urlparse, urljoin
 from typing import (Dict, Any, Optional, List, Tuple, Union)
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSystemTrayIcon, QAction, QColorDialog, QPushButton, QTextEdit, QGroupBox, QSpinBox, QComboBox, QCheckBox, QDialog, QFormLayout, QLineEdit, QGridLayout, QDialogButtonBox, QMessageBox, QTableWidget, QTableWidgetItem, QAbstractItemView, QDoubleSpinBox, QSlider, QFrame)
+from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSystemTrayIcon, QAction, QColorDialog, QPushButton, QTextEdit, QGroupBox, QSpinBox, QComboBox, QCheckBox, QDialog, QFormLayout, QLineEdit, QGridLayout, QDialogButtonBox, QMessageBox, QTableWidget, QTableWidgetItem, QAbstractItemView, QDoubleSpinBox, QSlider, QFrame, QToolButton)
 from PyQt5.QtGui import (QPainter, QPen, QColor, QFont, QIcon, QPixmap, QPalette, QPainterPath, QBrush, QDesktopServices, QWheelEvent, QCursor)
 from PyQt5.QtCore import (Qt, QTimer, QRect, QPoint, QSize, pyqtSignal, QRectF, QPointF, QUrl, QPropertyAnimation, QEasingCurve, pyqtProperty, QMetaObject)
 from PyQt5.QtNetwork import (QNetworkAccessManager, QNetworkRequest, QNetworkReply)
@@ -1680,6 +1680,7 @@ class SettingsDialog(QDialog):
         t = self._theme_palette()
         apply_dialog_theme(self, t)
         self.developer_label.setText(self.DEVELOPER_HTML % (t['text_dim'], t['accent']))
+        self._refresh_password_eye()
         self.save_button.setObjectName('primary')
         self.save_button.setStyleSheet('')
         self.save_button.style().unpolish(self.save_button)
@@ -1697,6 +1698,20 @@ class SettingsDialog(QDialog):
         self.router_password = QLineEdit()
         self.router_password.setEchoMode(QLineEdit.Password)
         self.router_password.setPlaceholderText('路由器登录密码')
+        # 密码框右侧的「小眼睛」：默认隐藏，点一下明文显示，便于核对输入。
+        password_row = QWidget()
+        password_layout = QHBoxLayout(password_row)
+        password_layout.setContentsMargins(0, 0, 0, 0)
+        password_layout.setSpacing(6)
+        self.password_eye_button = QToolButton()
+        self.password_eye_button.setCheckable(True)
+        self.password_eye_button.setAutoRaise(True)
+        self.password_eye_button.setCursor(Qt.PointingHandCursor)
+        self.password_eye_button.setFixedSize(30, 30)
+        self.password_eye_button.setToolTip('显示密码')
+        self.password_eye_button.toggled.connect(self._toggle_password_visibility)
+        password_layout.addWidget(self.router_password, 1)
+        password_layout.addWidget(self.password_eye_button)
         self.net_interface = QComboBox()
         self.net_interface.addItem('自动（按默认路由选择）', 'auto')
         self.router_status_indicator = QLabel()
@@ -1712,11 +1727,52 @@ class SettingsDialog(QDialog):
         layout.addRow('地址:', self.router_host)
         layout.addRow('端口:', self.router_port)
         layout.addRow('用户:', self.router_user)
-        layout.addRow('密码:', self.router_password)
+        layout.addRow('密码:', password_row)
         layout.addRow('网卡:', self.net_interface)
         self._seed_interfaces()
         layout.addRow('状态:', status_layout)
         return group
+
+    def _eye_icon(self, visible, color):
+        '''画一枚眼睛图标：睁眼 = 空心瞳，闭眼 = 加一道斜杠。不依赖外部资源。'''
+        size = 20
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        pen = QPen(QColor(color))
+        pen.setWidthF(1.5)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        path = QPainterPath()
+        path.moveTo(2.0, 10.0)
+        path.cubicTo(6.0, 4.2, 14.0, 4.2, 18.0, 10.0)
+        path.cubicTo(14.0, 15.8, 6.0, 15.8, 2.0, 10.0)
+        painter.drawPath(path)
+        if visible:
+            painter.setBrush(QBrush(QColor(color)))
+            painter.drawEllipse(QPointF(10.0, 10.0), 2.6, 2.6)
+        else:
+            painter.drawLine(QPointF(4.2, 16.0), QPointF(15.8, 4.0))
+        painter.end()
+        return QIcon(pixmap)
+
+    def _toggle_password_visibility(self, visible):
+        self.router_password.setEchoMode(QLineEdit.Normal if visible else QLineEdit.Password)
+        self._refresh_password_eye()
+
+    def _refresh_password_eye(self):
+        try:
+            visible = self.password_eye_button.isChecked()
+            color = self._theme_palette()['accent'] if visible else self._theme_palette()['text_dim']
+            self.password_eye_button.setIcon(self._eye_icon(visible, color))
+            self.password_eye_button.setToolTip('隐藏密码' if visible else '显示密码')
+            self.password_eye_button.setStyleSheet(
+                'QToolButton { border: none; background: transparent; padding: 0px; }'
+                'QToolButton:hover { background: transparent; }')
+        except Exception:
+            pass
 
     def test_router_connection(self):
         host = self.router_host.text().strip()
@@ -2139,6 +2195,10 @@ class RouterWidget(QWidget):
         self.router = None
         self.router_settings = None
         self.router_busy = False
+        # 连接失败后的退避状态：路由器的 SSH 未认证连接配额很小，失败后
+        # 立刻按原间隔重试会把它占满，最终连正常连接也建立不起来。
+        self.router_fail_count = 0
+        self.router_retry_at = 0.0
         self.router_executor = ThreadPoolExecutor(max_workers=1)
         self.router_sample_ready.connect(self.on_router_sample)
         self.last_error = ''
@@ -2824,9 +2884,19 @@ class RouterWidget(QWidget):
             self.is_online = False
             self.update_display()
 
+    # 连续失败时的退避上限（秒）。第一次失败等 2 秒，之后倍增，最多 30 秒。
+    ROUTER_BACKOFF_BASE = 2.0
+    ROUTER_BACKOFF_MAX = 30.0
+
+    def _router_backoff_delay(self, fails):
+        delay = self.ROUTER_BACKOFF_BASE * (2 ** max(0, fails - 1))
+        return min(delay, self.ROUTER_BACKOFF_MAX)
+
     def fetch_router_data(self):
         """Kick off one SSH sample on the worker thread (never blocks the GUI)."""
         if self.router_busy:
+            return
+        if time.monotonic() < self.router_retry_at:
             return
         self.router_busy = True
         try:
@@ -2863,8 +2933,13 @@ class RouterWidget(QWidget):
             self.cached_data = metrics
             self.is_online = True
             self.last_error = ''
+            self.router_fail_count = 0
+            self.router_retry_at = 0.0
         else:
-            self.last_error = error or '未知错误'
+            self.router_fail_count += 1
+            delay = self._router_backoff_delay(self.router_fail_count)
+            self.router_retry_at = time.monotonic() + delay
+            self.last_error = '%s（%d 秒后重试）' % (error or '未知错误', int(delay))
             self.metrics_data = self._get_zero_data()
             self.is_online = False
         self.update_display()
