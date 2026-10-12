@@ -255,6 +255,14 @@ class RouterStats:
         try:
             client.connect(**kwargs)
         except Exception as exc:
+            # 失败时必须显式关闭：paramiko 的 Transport 内部存在引用环，
+            # 不 close 就要等到 cyclic GC 才回收套接字；路由器（dropbear）
+            # 的未认证连接配额很小，残留几个之后就会拒绝一切新会话
+            # （表现为 Error reading SSH protocol banner）。
+            try:
+                client.close()
+            except Exception:
+                pass
             raise RouterStatsError(_friendly_auth_error(exc)) from exc
         transport = client.get_transport()
         if transport is not None:
@@ -465,10 +473,14 @@ class RouterStats:
 def _friendly_auth_error(exc: Exception) -> str:
     name = type(exc).__name__
     text = str(exc)
-    if 'Authentication' in name or 'authentication' in text.lower():
+    low = text.lower()
+    if 'Authentication' in name or 'authentication' in low:
         return '认证失败：用户名或密码不对'
-    if 'NoValidConnections' in name or 'timed out' in text.lower():
+    if 'banner' in low:
+        return ('路由器未响应 SSH 握手（连接数已满或被限流）。'
+                '请等待约 30 秒后重试；若持续出现，请检查路由器 SSH 服务状态')
+    if 'NoValidConnections' in name or 'timed out' in low:
         return '连接超时：检查路由器地址和端口'
-    if 'UnableToConnect' in name or 'refused' in text.lower():
+    if 'UnableToConnect' in name or 'refused' in low:
         return '无法连接：SSH 端口未开放'
     return '连接失败: %s' % text
