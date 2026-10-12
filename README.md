@@ -8,6 +8,19 @@
 
 ---
 
+## 下载
+
+| 文件 | 说明 |
+|---|---|
+| [**RouterSight-1.0-single.exe**](https://github.com/lhflowersbloom/RouterSight/releases/download/v1.0/RouterSight-1.0-single.exe) | 单文件版，下载后双击即用（首次启动稍慢） |
+| [**RouterSight-1.0-portable.zip**](https://github.com/lhflowersbloom/RouterSight/releases/download/v1.0/RouterSight-1.0-portable.zip) | 文件夹版，解压后运行 `RouterSight\RouterSight.exe`（启动更快，推荐） |
+
+两者功能完全相同，任选其一即可。**附件内不含配置文件**，首次运行会在程序同目录自动生成 `RouterSight_config.ini`。
+
+全部版本见 [Releases](https://github.com/lhflowersbloom/RouterSight/releases)。
+
+---
+
 ## 来源与致谢
 
 | | |
@@ -93,7 +106,7 @@
 
 ## 快速开始
 
-1. 下载 `RouterSight_单文件版.exe`（或整个 `RouterSight` 文件夹版）
+1. 从 [Releases](https://github.com/lhflowersbloom/RouterSight/releases) 下载 `RouterSight-1.0-single.exe`，或下载 `RouterSight-1.0-portable.zip` 后解压
 2. 双击运行后，托盘出现图标，桌面显示组件
 3. 托盘右键 → **设置**，填写：
 
