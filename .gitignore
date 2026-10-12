@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+dirdist/
+build_*/
+*.spec
+
+# 运行期产物
+RouterSight_selftest.txt
+RouterSight_config.ini
+RouterSight_config.ini.bak
+NetSight_config.ini
+*.log
+
+# 离屏渲染的临时图（docs/ 里的已提交）
+ui_*.png
+widget_*.png
+crop_*.png
+icon_sheet_new.png
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
