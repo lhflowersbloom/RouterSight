@@ -8,7 +8,9 @@ import sys
 
 os.environ.setdefault('QT_LOGGING_RULES', 'qt.qpa.fonts=false')
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-os.environ.setdefault('QT_QPA_FONTDIR', r'C:\Windows\Fonts')
+# Windows 下离屏渲染要显式指字体目录才画得出字；Linux 交给 fontconfig
+if sys.platform == 'win32':
+    os.environ.setdefault('QT_QPA_FONTDIR', r'C:\Windows\Fonts')
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt5.QtWidgets import QApplication

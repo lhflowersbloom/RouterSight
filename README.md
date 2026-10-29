@@ -10,12 +10,15 @@
 
 ## 下载
 
-| 文件 | 说明 |
-|---|---|
-| [**RouterSight-1.0-single.exe**](https://github.com/lhflowersbloom/RouterSight/releases/download/v1.0/RouterSight-1.0-single.exe) | 单文件版，下载后双击即用（首次启动稍慢） |
-| [**RouterSight-1.0-portable.zip**](https://github.com/lhflowersbloom/RouterSight/releases/download/v1.0/RouterSight-1.0-portable.zip) | 文件夹版，解压后运行 `RouterSight\RouterSight.exe`（启动更快，推荐） |
+| 文件 | 平台 | 说明 |
+|---|---|---|
+| [**RouterSight-1.1-x86_64.AppImage**](https://github.com/lhflowersbloom/RouterSight/releases/download/v1.1/RouterSight-1.1-x86_64.AppImage) | Linux x86_64 | 单文件 AppImage，`chmod +x` 后双击或命令行运行 |
+| [**RouterSight-1.0-single.exe**](https://github.com/lhflowersbloom/RouterSight/releases/download/v1.0/RouterSight-1.0-single.exe) | Windows | 单文件版，下载后双击即用（首次启动稍慢） |
+| [**RouterSight-1.0-portable.zip**](https://github.com/lhflowersbloom/RouterSight/releases/download/v1.0/RouterSight-1.0-portable.zip) | Windows | 文件夹版，解压后运行 `RouterSight\RouterSight.exe`（启动更快，推荐） |
 
-两者功能完全相同，任选其一即可。**附件内不含配置文件**，首次运行会在程序同目录自动生成 `RouterSight_config.ini`。
+同一平台的两个文件功能完全相同，任选其一即可。**附件内不含配置文件**，首次运行会在程序同目录自动生成 `RouterSight_config.ini`。
+
+Linux 版需要 glibc ≥ 2.17，构建与排错见 [linux/README-linux.md](linux/README-linux.md)；版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 全部版本见 [Releases](https://github.com/lhflowersbloom/RouterSight/releases)。
 

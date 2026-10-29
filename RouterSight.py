@@ -60,8 +60,8 @@ from urllib.parse import urlparse, urljoin
 from typing import (Dict, Any, Optional, List, Tuple, Union)
 from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
-from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSystemTrayIcon, QAction, QColorDialog, QPushButton, QTextEdit, QGroupBox, QSpinBox, QComboBox, QCheckBox, QDialog, QFormLayout, QLineEdit, QGridLayout, QDialogButtonBox, QMessageBox, QTableWidget, QTableWidgetItem, QAbstractItemView, QDoubleSpinBox, QSlider, QFrame, QToolButton)
-from PyQt5.QtGui import (QPainter, QPen, QColor, QFont, QIcon, QPixmap, QPalette, QPainterPath, QBrush, QDesktopServices, QWheelEvent, QCursor)
+from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSystemTrayIcon, QAction, QColorDialog, QPushButton, QTextEdit, QGroupBox, QSpinBox, QComboBox, QCheckBox, QDialog, QFormLayout, QLineEdit, QGridLayout, QDialogButtonBox, QMessageBox, QTableWidget, QTableWidgetItem, QAbstractItemView, QDoubleSpinBox, QSlider, QFrame, QToolButton, QScrollArea)
+from PyQt5.QtGui import (QPainter, QPen, QColor, QFont, QFontMetrics, QIcon, QPixmap, QPalette, QPainterPath, QBrush, QDesktopServices, QWheelEvent, QCursor)
 from PyQt5.QtCore import (Qt, QTimer, QRect, QPoint, QSize, pyqtSignal, QRectF, QPointF, QUrl, QPropertyAnimation, QEasingCurve, pyqtProperty, QMetaObject)
 from PyQt5.QtNetwork import (QNetworkAccessManager, QNetworkRequest, QNetworkReply)
 try:
@@ -80,14 +80,95 @@ warnings.filterwarnings('ignore', message='.*sipPyTypeDict.*')
 if sys.stdout is not None:
     sys.stdout.flush()
 
+
+# ------------------------------------------------------------------ 平台适配
+# Windows 走原有逻辑；Linux（AppImage）下资源目录、字体与系统集成都需要换一套做法。
+
+def is_linux():
+    return sys.platform.startswith('linux')
+
+
+def app_base_dir():
+    '''数据目录：Windows 为 exe 同目录；AppImage 为 .AppImage 文件所在目录。
+
+    AppImage 运行时 sys.executable 指向只读挂载点 (/tmp/.mount_*/usr/bin)，
+    配置写在那里重启即丢，所以改用 $APPIMAGE 的父目录，保持"绿色版"体验。
+    '''
+    if is_linux() and os.environ.get('APPIMAGE'):
+        return os.path.dirname(os.path.abspath(os.environ['APPIMAGE']))
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def writable_base_dir():
+    '''app_base_dir() 可写就返回它，否则退到 ~/.config/RouterSight。'''
+    base = app_base_dir()
+    try:
+        if os.path.isdir(base) and os.access(base, os.W_OK):
+            return base
+    except Exception:
+        pass
+    fallback = os.path.join(os.path.expanduser('~'), '.config', 'RouterSight')
+    try:
+        os.makedirs(fallback, exist_ok=True)
+    except Exception:
+        pass
+    return fallback
+
+
+_FONT_FAMILY_CACHE = {}
+
+
+def ui_font_family():
+    '''界面字体：Windows 用微软雅黑，Linux 按 fontconfig 的实际可用字体挑一个 CJK 字体。'''
+    if not is_linux():
+        return '微软雅黑'
+    cached = _FONT_FAMILY_CACHE.get('family')
+    if cached:
+        return cached
+    family = 'Noto Sans CJK SC'
+    try:
+        from PyQt5.QtGui import QFontDatabase
+        available = set(QFontDatabase().families())
+        for name in ('Noto Sans CJK SC', 'Source Han Sans SC', 'Noto Sans SC',
+                     'Sarasa Gothic SC', 'WenQuanYi Micro Hei', 'Droid Sans Fallback',
+                     'DejaVu Sans'):
+            if name in available:
+                family = name
+                break
+    except Exception:
+        pass
+    _FONT_FAMILY_CACHE['family'] = family
+    return family
+
+
+def ui_font(size, weight=QFont.Normal):
+    return QFont(ui_font_family(), size, weight)
+
+
+def ui_font_px(pixel_size, weight=QFont.Normal):
+    '''按像素字号建字体。
+
+    卡片是按固定像素设计的（默认 250x120），而"点"字号会随屏幕 DPI 放大，
+    X11 上 Xft.dpi 一改，文字就撑破卡片、标题与数值叠在一起。
+    改用像素字号后，组件尺寸和文字排版都不再受 DPI 影响，
+    保持与 Windows 100% 缩放时一致的观感。
+    '''
+    font = QFont(ui_font_family())
+    font.setPixelSize(max(1, int(pixel_size)))
+    font.setWeight(weight)
+    return font
+
+
 class ConfigManager:
     '''配置管理类 - 代码结构优化版'''
 
-    DEFAULT_CONFIG = {'api_url': 'http://192.168.100.1:19999/api/v1/allmetrics?format=json', 'refresh_interval': '1', 'data_points': '50', 'layout_option': '2', 'theme': '1', 'card_opacity': '70', 'text_opacity': '50', 'chart_opacity': '90', 'card_radius': '5', 'widget_width': '250', 'widget_height': '120', 'widget_x': '-1', 'widget_y': '-1', 'widget_visible': 'True', 'widget_locked': 'False', 'widget_stays_on_top': 'False', 'show_cpu_chart': 'True', 'show_memory_chart': 'True', 'show_disk_chart': 'True', 'show_network_chart': 'True', 'show_upload_chart': 'True', 'show_connections_chart': 'True', 'edge_hide': 'True', 'click_through': 'False', 'data_source': 'router', 'router_host': '192.168.9.1', 'router_port': '22', 'router_user': 'root', 'router_password': '', 'router_key': '', 'net_interface': 'auto', 'auto_start': 'False', 'stays_on_top': 'False', 'animation_enabled': 'True', 'cache_enabled': 'True', 'performance_mode': '0', 'shortcut_button_size': '20', 'shortcut_button_radius': '5', 'shortcut_links': '[]', 'shortcut_button_position': 'bottom', 'shortcut_button_alignment': 'left', 'shortcut_display_mode': 'none', 'shortcut_animation_mode': 'default', 'shortcut_button_offset_x': '0', 'shortcut_button_offset_y': '0', 'shortcut_border_width': '0', 'shortcut_button_spacing': '5', 'shortcut_hover_scale': '1.2', 'shortcut_border_opacity': '100'}
+    DEFAULT_CONFIG = {'api_url': 'http://192.168.100.1:19999/api/v1/allmetrics?format=json', 'refresh_interval': '1', 'data_points': '50', 'layout_option': '2', 'theme': '1', 'card_opacity': '70', 'text_opacity': '50', 'chart_opacity': '90', 'card_radius': '5', 'widget_width': '250', 'widget_height': '120', 'widget_x': '-1', 'widget_y': '-1', 'widget_visible': 'True', 'widget_locked': 'False', 'widget_stays_on_top': 'False', 'show_cpu_chart': 'True', 'show_memory_chart': 'True', 'show_disk_chart': 'True', 'show_network_chart': 'True', 'show_upload_chart': 'True', 'show_connections_chart': 'True', 'edge_hide': 'True', 'click_through': 'False', 'data_source': 'router', 'router_host': '192.168.9.1', 'router_port': '22', 'router_user': 'root', 'router_password': '', 'router_key': '', 'net_interface': 'auto', 'auto_start': 'False', 'stays_on_top': 'False', 'animation_enabled': 'True', 'cache_enabled': 'True', 'performance_mode': '0', 'shortcut_button_size': '20', 'shortcut_button_radius': '5', 'shortcut_links': '[]', 'shortcut_button_position': 'bottom', 'shortcut_button_alignment': 'left', 'shortcut_display_mode': 'none', 'shortcut_animation_mode': 'default', 'shortcut_button_offset_x': '0', 'shortcut_button_offset_y': '0', 'shortcut_border_width': '0', 'shortcut_button_spacing': '5', 'shortcut_hover_scale': '1.2', 'shortcut_border_opacity': '100', 'ui_scale': '0', 'close_to_tray': 'True', 'hide_from_taskbar': 'True'}
     def __init__(self, config_file: str='RouterSight_config.ini'):
         if hasattr(self, '_initialized'):
             return
-        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+        base_dir = writable_base_dir()
         self.config_file = os.path.join(base_dir, config_file) if not os.path.isabs(config_file) else config_file
         if not os.path.exists(self.config_file):
             legacy = os.path.join(base_dir, 'NetSight_config.ini')
@@ -607,7 +688,7 @@ class ShortcutButton(QWidget):
 
     def _draw_text_icon(self, painter, rect, text_color):
         painter.setPen(QPen(text_color, 1))
-        font = QFont('微软雅黑', max(10, int(self.size * self._scale) // 3), QFont.Bold)
+        font = ui_font(max(10, int(self.size * self._scale) // 3), QFont.Bold)
         painter.setFont(font)
         painter.drawText(rect, Qt.AlignCenter, self.display_char)
 
@@ -1321,27 +1402,38 @@ class MetricChart(QWidget):
         self.last_paint_time = current_time
 
     def _paint_normal_mode(self, painter, text_color):
-        font_size, value_font_size, title_y, value_y = self._calculate_font_sizes()
-        painter.setPen(QPen(text_color, 1))
-        painter.setFont(QFont('微软雅黑', font_size, QFont.Bold))
-        title_text = getattr(self, 'display_title', self.title)
-        title_metrics = painter.fontMetrics()
-        elided_title = title_metrics.elidedText(title_text, Qt.ElideRight, self.width() - 10)
-        painter.drawText(5, title_y, elided_title)
-        painter.setFont(QFont('微软雅黑', value_font_size, QFont.Bold))
-        value_text = self._format_value_text()
-        value_metrics = painter.fontMetrics()
-        elided_value = value_metrics.elidedText(value_text, Qt.ElideRight, self.width() - 10)
-        painter.drawText(5, value_y, elided_value)
+        # 先画曲线、后画文字：曲线填充再亮也不会盖住数值
         if len(self.data) > 1:
             self._draw_chart(painter)
+        title_px, value_px = self._calculate_font_sizes()
+        title_font = ui_font_px(title_px, QFont.Bold)
+        value_font = ui_font_px(value_px, QFont.Bold)
+        title_metrics = QFontMetrics(title_font)
+        value_metrics = QFontMetrics(value_font)
+        # 基線由真实字体度量推出，不再写死像素值：两行文字整体在卡片顶部居中对齐，
+        # 行高无论多大都不会互相盖住。
+        block_height = title_metrics.height() + value_metrics.height()
+        top = max(1, (min(self.height(), block_height + 6) - block_height) // 2 + 1)
+        title_baseline = top + title_metrics.ascent()
+        value_baseline = top + title_metrics.height() + value_metrics.ascent()
+
+        painter.setPen(QPen(text_color, 1))
+        painter.setFont(title_font)
+        title_text = getattr(self, 'display_title', self.title)
+        elided_title = title_metrics.elidedText(title_text, Qt.ElideRight, self.width() - 10)
+        painter.drawText(5, title_baseline, elided_title)
+        painter.setFont(value_font)
+        value_text = self._format_value_text()
+        elided_value = value_metrics.elidedText(value_text, Qt.ElideRight, self.width() - 10)
+        painter.drawText(5, value_baseline, elided_value)
 
     def _paint_single_line_mode(self, painter, text_color, opacity_settings):
         if len(self.data) > 1:
             self._draw_single_line_chart(painter, opacity_settings)
         painter.setPen(QPen(text_color, 1))
-        font_size = 8 if self.height() < 30 else 9 if self.height() < 50 else 10
-        font = QFont('微软雅黑', font_size, QFont.Bold)
+        # 像素字号：与卡片像素尺寸同一坐标系，不随 DPI 单独放大
+        font_size = 11 if self.height() < 30 else 12 if self.height() < 50 else 13
+        font = ui_font_px(font_size, QFont.Bold)
         painter.setFont(font)
         title_text = getattr(self, 'display_title', self.title)
         value_text = self._format_value_text()
@@ -1354,8 +1446,10 @@ class MetricChart(QWidget):
         painter.drawText(int(x), int(y), elided_text)
 
     def _paint_compact_mode(self, painter, text_color, opacity_settings):
-        font_size = 8 if self.width() < 50 else 10 if self.width() < 70 else 12
-        font = QFont('微软雅黑', font_size, QFont.Bold)
+        if len(self.data) > 1:
+            self._draw_chart(painter)
+        font_size = 11 if self.width() < 50 else 13 if self.width() < 70 else 16
+        font = ui_font_px(font_size, QFont.Bold)
         painter.setFont(font)
         painter.setPen(QPen(text_color, 1))
         title_text = getattr(self, 'display_title', self.title)
@@ -1365,18 +1459,28 @@ class MetricChart(QWidget):
         y = (self.height() + text_height) / 2 - 2
         elided_text = text_metrics.elidedText(title_text, Qt.ElideRight, self.width() - 10)
         painter.drawText(int(x), int(y), elided_text)
-        if len(self.data) > 1:
-            self._draw_chart(painter)
 
     def _calculate_font_sizes(self):
-        height = self.height()
-        if height < 30:
-            return (6, 8, 8, 18)
-        if height < 50:
-            return (7, 9, 10, 22)
-        if height < 70:
-            return (8, 11, 12, 30)
-        return (9, 12, 15, 35)
+        '''按卡片像素高度推算两行字号，再按实际字体度量回缩。
+
+        原实现用固定点字号 + 固定像素基线（10 / 22），在 96dpi 下刚好，但字号会
+        随 DPI 放大而基线不会，144dpi 屏幕上标题和数值就压到一起。这里改成：
+        字号从卡片高度算出 → 用 QFontMetrics 量出真实行高 → 放不下就继续缩小。
+        '''
+        height = max(12, self.height())
+        value_px = max(9, min(26, int(round(height * 0.32))))
+        title_px = max(7, min(16, int(round(value_px * 0.75))))
+        # 顶部文字最多占 17px 以外的空间，剩下的留给曲线（至少 14px），
+        # 这样矮卡片上文字会稍微回缩，而不是把曲线挤没或压住数值。
+        limit = max(14, height - 17)
+        while value_px > 8 and title_px > 6:
+            title_h = QFontMetrics(ui_font_px(title_px, QFont.Bold)).height()
+            value_h = QFontMetrics(ui_font_px(value_px, QFont.Bold)).height()
+            if title_h + value_h <= limit:
+                break
+            value_px -= 1
+            title_px = max(6, int(round(value_px * 0.75)))
+        return (title_px, value_px)
 
     def _draw_chart(self, painter):
         opacity_settings = self._get_opacity_settings()
@@ -1393,15 +1497,30 @@ class MetricChart(QWidget):
             if chart_rect.height() > 0:
                 self._draw_chart_path(painter, chart_rect, opacity_settings['chart_opacity'])
 
+    def _text_block_height(self):
+        '''两行文字（标题 + 数值）的实际像素高度，用于给曲线留出顶部空间。'''
+        try:
+            title_px, value_px = self._calculate_font_sizes()
+            return (QFontMetrics(ui_font_px(title_px, QFont.Bold)).height()
+                    + QFontMetrics(ui_font_px(value_px, QFont.Bold)).height())
+        except Exception:
+            return 0
+
     def _calculate_chart_margins(self):
         height = self.height()
         if height < 30:
-            return (15, 3, 3)
-        if height < 50:
-            return (18, 3, 4)
-        if height < 80:
-            return (25, 4, 5)
-        return (35, 5, 5)
+            base, bottom, side = 15, 3, 3
+        elif height < 50:
+            base, bottom, side = 18, 3, 4
+        elif height < 80:
+            base, bottom, side = 25, 4, 5
+        else:
+            base, bottom, side = 35, 5, 5
+        # 曲线从文字下方开始：顶部留白不小于两行文字的实际高度，
+        # 否则曲线填充会把数值盖住（浅色/深色主题都一样）。
+        top = max(base, self._text_block_height() + 3)
+        top = min(top, max(6, height - 16))
+        return (top, bottom, side)
 
     def _draw_chart_path(self, painter, chart_rect, chart_opacity):
         chart_width, chart_height = chart_rect.width(), chart_rect.height()
@@ -1491,7 +1610,8 @@ def _arrow_css(variant):
 DIALOG_STYLESHEET = (
     'QDialog { background: %(window)s;'
     ' font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",'
-    ' "Microsoft YaHei", "PingFang SC", sans-serif; font-size: 12px; }'
+    ' "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC",'
+    ' "WenQuanYi Micro Hei", sans-serif; font-size: 12px; }'
     'QLabel { color: %(text)s; font-size: 12px; background: transparent; }'
     'QLabel#dim { color: %(text_dim)s; }'
     'QGroupBox { color: %(group_title)s; font-size: 12px; font-weight: 600;'
@@ -1628,13 +1748,42 @@ class SettingsDialog(QDialog):
         self.load_settings()
         self._apply_theme()
         natural = self.sizeHint()
-        self.setMinimumSize(natural)
-        self.resize(natural)
+        width, height = natural.width(), natural.height()
+        # 小屏保护：按 sizeHint 铺开需要 1200+ px 高，1366x768 的笔记本上
+        # 底部"保存设置"会被顶出屏幕。这里收敛到可用区域，超出的部分由滚动区承接。
+        try:
+            screen = QApplication.primaryScreen()
+            avail = screen.availableGeometry() if screen is not None else None
+            if avail is not None and avail.height() > 0:
+                width = min(width, max(480, avail.width() - 40))
+                height = min(height, max(520, avail.height() - 80))
+        except Exception:
+            pass
+        self.setMinimumSize(480, min(480, height))
+        self.resize(width, height)
 
     def init_ui(self):
-        main_layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+        # 内容整体有 1200+ px 高，1366x768 的笔记本按 sizeHint 铺开会把底部按钮顶出屏幕，
+        # 所以内容放进滚动区，底部按钮固定在窗口下沿。
+        self.content_scroll = QScrollArea(self)
+        self.content_scroll.setObjectName('dialogScroll')
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setFrameShape(QFrame.NoFrame)
+        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        content.setObjectName('dialogContent')
+        self.content_scroll.viewport().setAutoFillBackground(False)
+        main_layout = QVBoxLayout(content)
         main_layout.setContentsMargins(14, 12, 14, 12)
         main_layout.setSpacing(10)
+        self.content_scroll.setWidget(content)
+        # setWidget() 会重新打开内容控件的自动填充，这里再关一次，让主题色透上来
+        content.setAutoFillBackground(False)
+        outer_layout.addWidget(self.content_scroll, 1)
+
         self.router_group = self._create_router_group()
         card_selection_group = self._create_card_selection_group()
         display_group = self._create_display_group()
@@ -1647,7 +1796,14 @@ class SettingsDialog(QDialog):
         main_layout.addWidget(performance_group)
         main_layout.addStretch(1)
         main_layout.addLayout(self._create_developer_layout())
-        main_layout.addLayout(self._create_button_layout())
+
+        footer = QWidget()
+        footer.setObjectName('dialogFooter')
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(14, 4, 14, 12)
+        footer_layout.addLayout(self._create_button_layout())
+        outer_layout.addWidget(footer, 0)
+
         self._connect_signals()
 
     # ---------------------------------------------------------------- theming
@@ -1679,6 +1835,14 @@ class SettingsDialog(QDialog):
         '''One stylesheet for the whole dialog so nothing looks half-native.'''
         t = self._theme_palette()
         apply_dialog_theme(self, t)
+        # 滚动区/底部栏默认会画自己的底色，这里一并交给主题控制，避免出现色块
+        self.setStyleSheet(self.styleSheet() + (
+            '\nQScrollArea#dialogScroll, QScrollArea#dialogScroll > QWidget,'
+            ' QScrollArea#dialogScroll > QWidget > QWidget, QWidget#dialogContent'
+            ' { background: %(window)s; border: none; }'
+            ' QWidget#dialogFooter { background: %(window)s;'
+            ' border-top: 1px solid %(panel_border)s; }'
+            % {'window': t['window'], 'panel_border': t['panel_border']}))
         self.developer_label.setText(self.DEVELOPER_HTML % (t['text_dim'], t['accent']))
         self._refresh_password_eye()
         self.save_button.setObjectName('primary')
@@ -1886,18 +2050,30 @@ class SettingsDialog(QDialog):
         self.widget_width.setSuffix(' 像素')
         self.widget_height.setRange(10, 500)
         self.widget_height.setSuffix(' 像素')
+        self.ui_scale = QSpinBox()
+        self.ui_scale.setRange(0, 250)
+        self.ui_scale.setSuffix(' %')
+        self.ui_scale.setSpecialValueText('自动')
+        self.ui_scale.setToolTip('整体缩放组件尺寸与文字。自动 = 按桌面缩放比例的 70%（100%~160%）')
         self.edge_hide = QCheckBox('靠边隐藏')
         self.edge_hide.setToolTip('拖到屏幕边缘停靠后自动收起，只留 4 像素；鼠标碰一下边缘再滑出（多显示器按光标所在屏幕，避开任务栏）')
+        self.close_to_tray = QCheckBox('关闭时缩到托盘')
+        self.close_to_tray.setToolTip('收到窗口后留在托盘继续监控，右键托盘图标可重新显示或退出')
+        self.hide_from_taskbar = QCheckBox('不在任务栏显示')
+        self.hide_from_taskbar.setToolTip('组件只在托盘里挂着，不占任务栏、不参与 Alt+Tab')
         self.click_through = QCheckBox('鼠标穿透')
         self.click_through.setToolTip('开启后鼠标点击穿透到下面的窗口，卡片不能右键也不能拖动；只能在托盘菜单里关掉')
-        controls = [(0, 0, '刷新间隔:', self.refresh_interval), (0, 2, '数据数量:', self.data_points), (1, 0, '布局选项:', self.layout_option), (1, 2, '应用主题:', self.theme_select), (2, 0, '背景透明:', self.card_opacity), (2, 2, '文字透明:', self.text_opacity), (3, 0, '折线透明:', self.chart_opacity), (3, 2, '卡片圆角:', self.card_radius), (4, 0, '部件宽度:', self.widget_width), (4, 2, '部件高度:', self.widget_height)]
+        controls = [(0, 0, '刷新间隔:', self.refresh_interval), (0, 2, '数据数量:', self.data_points), (1, 0, '布局选项:', self.layout_option), (1, 2, '应用主题:', self.theme_select), (2, 0, '背景透明:', self.card_opacity), (2, 2, '文字透明:', self.text_opacity), (3, 0, '折线透明:', self.chart_opacity), (3, 2, '卡片圆角:', self.card_radius), (4, 0, '部件宽度:', self.widget_width), (4, 2, '部件高度:', self.widget_height), (5, 0, '界面缩放:', self.ui_scale)]
         for row, col, label_text, control in controls:
             label = QLabel(label_text)
             layout.addWidget(label, row, col, Qt.AlignRight)
             layout.addWidget(control, row, col + 1)
-        layout.addWidget(QLabel('窗口行为:'), 5, 0, Qt.AlignRight)
-        layout.addWidget(self.edge_hide, 5, 1)
-        layout.addWidget(self.click_through, 5, 2)
+        layout.addWidget(QLabel('窗口行为:'), 6, 0, Qt.AlignRight)
+        layout.addWidget(self.edge_hide, 6, 1)
+        layout.addWidget(self.click_through, 6, 2)
+        layout.addWidget(QLabel('托盘 / 任务栏:'), 7, 0, Qt.AlignRight)
+        layout.addWidget(self.close_to_tray, 7, 1)
+        layout.addWidget(self.hide_from_taskbar, 7, 2)
         return group
 
     def _create_shortcut_group(self):
@@ -2015,7 +2191,7 @@ class SettingsDialog(QDialog):
         self._connect_preview_signals()
 
     def _connect_preview_signals(self):
-        preview_controls = [(self.refresh_interval, 'valueChanged', int), (self.data_points, 'valueChanged', int), (self.layout_option, 'currentIndexChanged', (lambda: self.layout_option.currentData())), (self.theme_select, 'currentIndexChanged', int), (self.card_opacity, 'valueChanged', int), (self.text_opacity, 'valueChanged', int), (self.chart_opacity, 'valueChanged', int), (self.card_radius, 'valueChanged', int), (self.widget_width, 'valueChanged', int), (self.widget_height, 'valueChanged', int), (self.show_cpu_chart, 'toggled', bool), (self.show_memory_chart, 'toggled', bool), (self.show_disk_chart, 'toggled', bool), (self.show_network_chart, 'toggled', bool), (self.show_upload_chart, 'toggled', bool), (self.show_connections_chart, 'toggled', bool), (self.edge_hide, 'toggled', bool), (self.click_through, 'toggled', bool), (self.performance_mode, 'currentIndexChanged', (lambda: self.performance_mode.currentData())), (self.animation_enabled, 'toggled', bool), (self.cache_enabled, 'toggled', bool), (self.shortcut_button_size, 'valueChanged', int), (self.shortcut_button_radius, 'valueChanged', int), (self.shortcut_border_width, 'valueChanged', int), (self.shortcut_hover_scale, 'valueChanged', float), (self.shortcut_button_position, 'currentIndexChanged', str), (self.shortcut_button_alignment, 'currentIndexChanged', str), (self.shortcut_display_mode, 'currentIndexChanged', str), (self.shortcut_animation_mode, 'currentIndexChanged', str), (self.shortcut_button_offset_x, 'valueChanged', int), (self.shortcut_button_offset_y, 'valueChanged', int), (self.shortcut_button_spacing, 'valueChanged', int)]
+        preview_controls = [(self.refresh_interval, 'valueChanged', int), (self.data_points, 'valueChanged', int), (self.layout_option, 'currentIndexChanged', (lambda: self.layout_option.currentData())), (self.theme_select, 'currentIndexChanged', int), (self.card_opacity, 'valueChanged', int), (self.text_opacity, 'valueChanged', int), (self.chart_opacity, 'valueChanged', int), (self.card_radius, 'valueChanged', int), (self.widget_width, 'valueChanged', int), (self.widget_height, 'valueChanged', int), (self.ui_scale, 'valueChanged', int), (self.show_cpu_chart, 'toggled', bool), (self.show_memory_chart, 'toggled', bool), (self.show_disk_chart, 'toggled', bool), (self.show_network_chart, 'toggled', bool), (self.show_upload_chart, 'toggled', bool), (self.show_connections_chart, 'toggled', bool), (self.edge_hide, 'toggled', bool), (self.click_through, 'toggled', bool), (self.close_to_tray, 'toggled', bool), (self.hide_from_taskbar, 'toggled', bool), (self.performance_mode, 'currentIndexChanged', (lambda: self.performance_mode.currentData())), (self.animation_enabled, 'toggled', bool), (self.cache_enabled, 'toggled', bool), (self.shortcut_button_size, 'valueChanged', int), (self.shortcut_button_radius, 'valueChanged', int), (self.shortcut_border_width, 'valueChanged', int), (self.shortcut_hover_scale, 'valueChanged', float), (self.shortcut_button_position, 'currentIndexChanged', str), (self.shortcut_button_alignment, 'currentIndexChanged', str), (self.shortcut_display_mode, 'currentIndexChanged', str), (self.shortcut_animation_mode, 'currentIndexChanged', str), (self.shortcut_button_offset_x, 'valueChanged', int), (self.shortcut_button_offset_y, 'valueChanged', int), (self.shortcut_button_spacing, 'valueChanged', int)]
         for control, signal, converter in preview_controls:
             if hasattr(control, signal):
                 getattr(control, signal).connect(self._start_preview_timer)
@@ -2091,6 +2267,7 @@ class SettingsDialog(QDialog):
         self.card_radius.setValue(config.getint('card_radius'))
         self.widget_width.setValue(config.getint('widget_width'))
         self.widget_height.setValue(config.getint('widget_height'))
+        self.ui_scale.setValue(config.getint('ui_scale', 0))
         self.show_cpu_chart.setChecked(config.getboolean('show_cpu_chart'))
         self.show_memory_chart.setChecked(config.getboolean('show_memory_chart'))
         self.show_disk_chart.setChecked(config.getboolean('show_disk_chart'))
@@ -2098,6 +2275,8 @@ class SettingsDialog(QDialog):
         self.show_upload_chart.setChecked(config.getboolean('show_upload_chart'))
         self.edge_hide.setChecked(config.getboolean('edge_hide', True))
         self.click_through.setChecked(config.getboolean('click_through', False))
+        self.close_to_tray.setChecked(config.getboolean('close_to_tray', True))
+        self.hide_from_taskbar.setChecked(config.getboolean('hide_from_taskbar', True))
         self.show_connections_chart.setChecked(config.getboolean('show_connections_chart'))
         performance_index = self.performance_mode.findData(config.getint('performance_mode'))
         if performance_index >= 0:
@@ -2119,7 +2298,7 @@ class SettingsDialog(QDialog):
 
     def save_settings(self):
         config = self.parent().config_manager if self.parent() and hasattr(self.parent(), 'config_manager') else ConfigManager()
-        settings = {'refresh_interval': self.refresh_interval.value(), 'data_points': self.data_points.value(), 'layout_option': self.layout_option.currentData(), 'theme': self.theme_select.currentIndex(), 'card_opacity': self.card_opacity.value(), 'text_opacity': self.text_opacity.value(), 'chart_opacity': self.chart_opacity.value(), 'card_radius': self.card_radius.value(), 'widget_width': self.widget_width.value(), 'widget_height': self.widget_height.value(), 'show_cpu_chart': self.show_cpu_chart.isChecked(), 'show_memory_chart': self.show_memory_chart.isChecked(), 'show_disk_chart': self.show_disk_chart.isChecked(), 'show_network_chart': self.show_network_chart.isChecked(), 'show_upload_chart': self.show_upload_chart.isChecked(), 'edge_hide': self.edge_hide.isChecked(), 'click_through': self.click_through.isChecked(), 'show_connections_chart': self.show_connections_chart.isChecked(), 'data_source': 'router', 'router_host': self.router_host.text().strip(), 'router_port': self.router_port.value(), 'router_user': self.router_user.text().strip(), 'router_password': self.router_password.text(), 'net_interface': self.net_interface.currentData() or 'auto', 'performance_mode': self.performance_mode.currentData(), 'animation_enabled': self.animation_enabled.isChecked(), 'cache_enabled': self.cache_enabled.isChecked(), 'shortcut_button_size': self.shortcut_button_size.value(), 'shortcut_button_radius': self.shortcut_button_radius.value(), 'shortcut_border_width': self.shortcut_border_width.value(), 'shortcut_hover_scale': self.shortcut_hover_scale.value(), 'shortcut_button_position': self.shortcut_button_position.currentData(), 'shortcut_button_alignment': self.shortcut_button_alignment.currentData(), 'shortcut_display_mode': self.shortcut_display_mode.currentData(), 'shortcut_animation_mode': self.shortcut_animation_mode.currentData(), 'shortcut_button_offset_x': self.shortcut_button_offset_x.value(), 'shortcut_button_offset_y': self.shortcut_button_offset_y.value(), 'shortcut_button_spacing': self.shortcut_button_spacing.value()}
+        settings = {'refresh_interval': self.refresh_interval.value(), 'data_points': self.data_points.value(), 'layout_option': self.layout_option.currentData(), 'theme': self.theme_select.currentIndex(), 'card_opacity': self.card_opacity.value(), 'text_opacity': self.text_opacity.value(), 'chart_opacity': self.chart_opacity.value(), 'card_radius': self.card_radius.value(), 'widget_width': self.widget_width.value(), 'widget_height': self.widget_height.value(), 'ui_scale': self.ui_scale.value(), 'show_cpu_chart': self.show_cpu_chart.isChecked(), 'show_memory_chart': self.show_memory_chart.isChecked(), 'show_disk_chart': self.show_disk_chart.isChecked(), 'show_network_chart': self.show_network_chart.isChecked(), 'show_upload_chart': self.show_upload_chart.isChecked(), 'edge_hide': self.edge_hide.isChecked(), 'click_through': self.click_through.isChecked(), 'close_to_tray': self.close_to_tray.isChecked(), 'hide_from_taskbar': self.hide_from_taskbar.isChecked(), 'show_connections_chart': self.show_connections_chart.isChecked(), 'data_source': 'router', 'router_host': self.router_host.text().strip(), 'router_port': self.router_port.value(), 'router_user': self.router_user.text().strip(), 'router_password': self.router_password.text(), 'net_interface': self.net_interface.currentData() or 'auto', 'performance_mode': self.performance_mode.currentData(), 'animation_enabled': self.animation_enabled.isChecked(), 'cache_enabled': self.cache_enabled.isChecked(), 'shortcut_button_size': self.shortcut_button_size.value(), 'shortcut_button_radius': self.shortcut_button_radius.value(), 'shortcut_border_width': self.shortcut_border_width.value(), 'shortcut_hover_scale': self.shortcut_hover_scale.value(), 'shortcut_button_position': self.shortcut_button_position.currentData(), 'shortcut_button_alignment': self.shortcut_button_alignment.currentData(), 'shortcut_display_mode': self.shortcut_display_mode.currentData(), 'shortcut_animation_mode': self.shortcut_animation_mode.currentData(), 'shortcut_button_offset_x': self.shortcut_button_offset_x.value(), 'shortcut_button_offset_y': self.shortcut_button_offset_y.value(), 'shortcut_button_spacing': self.shortcut_button_spacing.value()}
         for key, value in settings.items():
             config.set(key, value)
         config.save_config()
@@ -2145,6 +2324,8 @@ class SettingsDialog(QDialog):
             checkbox.setChecked(True)
         self.edge_hide.setChecked(True)
         self.click_through.setChecked(False)
+        self.close_to_tray.setChecked(True)
+        self.hide_from_taskbar.setChecked(True)
         self.performance_mode.setCurrentIndex(0)
         self.animation_enabled.setChecked(True)
         self.cache_enabled.setChecked(True)
@@ -2166,7 +2347,7 @@ class SettingsDialog(QDialog):
         if not self.parent():
             return
         parent = self.parent()
-        preview_config = {'refresh_interval': self.refresh_interval.value(), 'data_points': self.data_points.value(), 'layout_option': self.layout_option.currentData(), 'theme': self.theme_select.currentIndex(), 'card_opacity': self.card_opacity.value(), 'text_opacity': self.text_opacity.value(), 'chart_opacity': self.chart_opacity.value(), 'card_radius': self.card_radius.value(), 'widget_width': self.widget_width.value(), 'widget_height': self.widget_height.value(), 'show_cpu_chart': self.show_cpu_chart.isChecked(), 'show_memory_chart': self.show_memory_chart.isChecked(), 'show_disk_chart': self.show_disk_chart.isChecked(), 'show_network_chart': self.show_network_chart.isChecked(), 'show_upload_chart': self.show_upload_chart.isChecked(), 'edge_hide': self.edge_hide.isChecked(), 'click_through': self.click_through.isChecked(), 'show_connections_chart': self.show_connections_chart.isChecked(), 'performance_mode': self.performance_mode.currentData(), 'animation_enabled': self.animation_enabled.isChecked(), 'cache_enabled': self.cache_enabled.isChecked(), 'shortcut_button_size': self.shortcut_button_size.value(), 'shortcut_button_radius': self.shortcut_button_radius.value(), 'shortcut_border_width': self.shortcut_border_width.value(), 'shortcut_hover_scale': self.shortcut_hover_scale.value(), 'shortcut_button_position': self.shortcut_button_position.currentData(), 'shortcut_button_alignment': self.shortcut_button_alignment.currentData(), 'shortcut_display_mode': self.shortcut_display_mode.currentData(), 'shortcut_animation_mode': self.shortcut_animation_mode.currentData(), 'shortcut_button_offset_x': self.shortcut_button_offset_x.value(), 'shortcut_button_offset_y': self.shortcut_button_offset_y.value(), 'shortcut_button_spacing': self.shortcut_button_spacing.value()}
+        preview_config = {'refresh_interval': self.refresh_interval.value(), 'data_points': self.data_points.value(), 'layout_option': self.layout_option.currentData(), 'theme': self.theme_select.currentIndex(), 'card_opacity': self.card_opacity.value(), 'text_opacity': self.text_opacity.value(), 'chart_opacity': self.chart_opacity.value(), 'card_radius': self.card_radius.value(), 'widget_width': self.widget_width.value(), 'widget_height': self.widget_height.value(), 'ui_scale': self.ui_scale.value(), 'show_cpu_chart': self.show_cpu_chart.isChecked(), 'show_memory_chart': self.show_memory_chart.isChecked(), 'show_disk_chart': self.show_disk_chart.isChecked(), 'show_network_chart': self.show_network_chart.isChecked(), 'show_upload_chart': self.show_upload_chart.isChecked(), 'edge_hide': self.edge_hide.isChecked(), 'click_through': self.click_through.isChecked(), 'close_to_tray': self.close_to_tray.isChecked(), 'hide_from_taskbar': self.hide_from_taskbar.isChecked(), 'show_connections_chart': self.show_connections_chart.isChecked(), 'performance_mode': self.performance_mode.currentData(), 'animation_enabled': self.animation_enabled.isChecked(), 'cache_enabled': self.cache_enabled.isChecked(), 'shortcut_button_size': self.shortcut_button_size.value(), 'shortcut_button_radius': self.shortcut_button_radius.value(), 'shortcut_border_width': self.shortcut_border_width.value(), 'shortcut_hover_scale': self.shortcut_hover_scale.value(), 'shortcut_button_position': self.shortcut_button_position.currentData(), 'shortcut_button_alignment': self.shortcut_button_alignment.currentData(), 'shortcut_display_mode': self.shortcut_display_mode.currentData(), 'shortcut_animation_mode': self.shortcut_animation_mode.currentData(), 'shortcut_button_offset_x': self.shortcut_button_offset_x.value(), 'shortcut_button_offset_y': self.shortcut_button_offset_y.value(), 'shortcut_button_spacing': self.shortcut_button_spacing.value()}
         parent.apply_preview_settings(preview_config)
 
 
@@ -2221,6 +2402,45 @@ class RouterWidget(QWidget):
         self.setup_timer()
         self.fetch_data()
 
+    def closeEvent(self, event):
+        '''关闭窗口时留在托盘继续跑；托盘里点"退出"才真正退出。'''
+        try:
+            # 没托盘可用时不能"关闭到托盘"，否则窗口消失又找不回来
+            to_tray = (not getattr(self, '_force_quit', False)
+                       and self.tray_icon is not None
+                       and QSystemTrayIcon.isSystemTrayAvailable()
+                       and self.config_manager.getboolean('close_to_tray'))
+        except Exception:
+            to_tray = False
+        if to_tray:
+            event.ignore()
+            self.hide()
+            self._notify_tray_once()
+            return
+        # 没有托盘可缩，关掉窗口就等于退出（否则会变成没有界面的后台进程）
+        self._force_quit = True
+        super().closeEvent(event)
+        QApplication.quit()
+
+    def _notify_tray_once(self):
+        '''第一次缩到托盘时提示一下，免得用户以为程序被关掉了。'''
+        if getattr(self, '_tray_tip_shown', False):
+            return
+        self._tray_tip_shown = True
+        try:
+            self.tray_icon.showMessage('RouterSight',
+                                       '组件已收到托盘继续运行，右键托盘图标可以打开设置或退出。',
+                                       QSystemTrayIcon.Information, 4000)
+        except Exception:
+            pass
+
+    def toggle_widget_visible(self):
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
+
     def get_resource_path(self, relative_path):
         try:
             base_path = sys._MEIPASS
@@ -2228,11 +2448,17 @@ class RouterWidget(QWidget):
             base_path = os.path.abspath('.')
         return os.path.join(base_path, relative_path)
 
-    def init_ui(self):
-        window_flags = Qt.FramelessWindowHint | Qt.Tool
+    def _window_flags(self):
+        '''桌面组件默认用 Qt.Tool：不进任务栏、不参与 Alt+Tab，只在托盘里挂着。
+        关掉"不在任务栏显示"后改用 Qt.Window，普通任务栏条目就回来了。'''
+        flags = Qt.FramelessWindowHint
+        flags |= Qt.Tool if self.config_manager.getboolean('hide_from_taskbar') else Qt.Window
         if self.config_manager.getboolean('stays_on_top'):
-            window_flags |= Qt.WindowStaysOnTopHint
-        self.setWindowFlags(window_flags)
+            flags |= Qt.WindowStaysOnTopHint
+        return flags
+
+    def init_ui(self):
+        self.setWindowFlags(self._window_flags())
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setWindowTitle('RouterSight 路由视界')
         self._set_window_icon()
@@ -2766,6 +2992,7 @@ class RouterWidget(QWidget):
         self.tray_icon.setContextMenu(self._tray_menu)
 
     def clean_exit(self):
+        self._force_quit = True
         self.tray_icon.hide()
         self.tray_icon = None
         try:
@@ -2782,7 +3009,8 @@ class RouterWidget(QWidget):
 
     def _tray_actions(self):
         """托盘/右键菜单项。锁定/解锁与显示/隐藏已取消（靠边隐藏 + 鼠标穿透取代）。"""
-        return [('✓ 鼠标穿透' if self.is_click_through() else '鼠标穿透', self.toggle_click_through),
+        return [('显示 / 隐藏组件', self.toggle_widget_visible),
+                ('✓ 鼠标穿透' if self.is_click_through() else '鼠标穿透', self.toggle_click_through),
                 ('✓ 置顶' if self.is_stays_on_top else '置顶', self.toggle_stays_on_top),
                 (self._get_auto_start_text(), self.toggle_auto_start),
                 ('设置', self.open_settings), ('退出', self.clean_exit)]
@@ -3094,8 +3322,7 @@ class RouterWidget(QWidget):
         for chart in self.charts.values():
             chart.update_data_points(data_points)
         self.is_stays_on_top = self.config_manager.getboolean('stays_on_top')
-        flags = self.windowFlags() | Qt.WindowStaysOnTopHint if self.is_stays_on_top else self.windowFlags() & ~Qt.WindowStaysOnTopHint
-        self.setWindowFlags(flags)
+        self.setWindowFlags(self._window_flags())
         self._apply_click_through()
         self._dock_to_edge()
         self._apply_performance_settings()
@@ -3217,11 +3444,30 @@ class RouterWidget(QWidget):
     def get_card_radius(self):
         return self._get_config_value('card_radius', int)
 
+    def get_ui_scale(self):
+        '''整体缩放系数（配置项 ui_scale，单位 %，0 表示自动）。
+
+        桌面小部件不该像常规窗口那样整倍跟随系统缩放，否则高分屏上大得离谱；
+        自动模式取桌面缩放比例的 70%，并限制在 100%~160% 之间。
+        Windows 上恒为 1.0，保持原样。
+        '''
+        override = self._get_config_value('ui_scale', int, 0)
+        if override and override > 0:
+            return max(0.5, min(2.5, override / 100.0))
+        if not is_linux():
+            return 1.0
+        try:
+            screen = self.screen() or QApplication.primaryScreen()
+            dpi = screen.logicalDotsPerInch() if screen is not None else 96.0
+        except Exception:
+            dpi = 96.0
+        return max(1.0, min(1.6, (dpi / 96.0) * 0.7))
+
     def get_widget_width(self):
-        return self._get_config_value('widget_width', int)
+        return int(round(self._get_config_value('widget_width', int) * self.get_ui_scale()))
 
     def get_widget_height(self):
-        return self._get_config_value('widget_height', int)
+        return int(round(self._get_config_value('widget_height', int) * self.get_ui_scale()))
 
     def get_shortcut_button_size(self):
         return self._get_config_value('shortcut_button_size', int)
@@ -3284,10 +3530,25 @@ class RouterWidget(QWidget):
         开启后卡片收不到任何鼠标事件（不能右键、不能拖动），
         所以关掉它的唯一入口是托盘图标右键菜单。
         '''
-        if os.name != 'nt':
-            return
         if enabled is None:
             enabled = self.is_click_through()
+        if is_linux():
+            # Linux 用 Qt 的 WindowTransparentForInput 标志实现，需重建窗口才生效；
+            # 重建会丢失位置，所以先记下几何信息再恢复。Wayland 下部分合成器不支持。
+            try:
+                was_visible = self.isVisible()
+                geo = self.geometry()
+                self.setWindowFlag(Qt.WindowTransparentForInput, bool(enabled))
+                if was_visible:
+                    self.setGeometry(geo)
+                    self.show()
+                    self.setGeometry(geo)
+                self._click_through_applied = bool(enabled)
+            except Exception:
+                pass
+            return
+        if os.name != 'nt':
+            return
         try:
             import ctypes
             hwnd = int(self.winId())
@@ -3498,7 +3759,40 @@ class RouterWidget(QWidget):
                     action.setText(new_text)
                     return
 
+    def _set_auto_start_linux(self, enabled):
+        '''XDG 自启动：写 ~/.config/autostart/routersight.desktop，等价于 Windows 的 Run 键。'''
+        autostart_dir = os.path.join(os.path.expanduser('~'), '.config', 'autostart')
+        desktop_path = os.path.join(autostart_dir, 'routersight.desktop')
+        try:
+            if not enabled:
+                if os.path.exists(desktop_path):
+                    os.remove(desktop_path)
+                return
+            if getattr(sys, 'frozen', False):
+                parts = [os.environ.get('APPIMAGE') or os.path.abspath(sys.executable)]
+            else:
+                parts = [os.path.abspath(sys.executable), os.path.abspath(sys.argv[0])]
+            exec_line = ' '.join(('"%s"' % part) if ' ' in part else part for part in parts)
+            os.makedirs(autostart_dir, exist_ok=True)
+            content = ('[Desktop Entry]\n'
+                       'Type=Application\n'
+                       'Name=RouterSight\n'
+                       'Comment=RouterSight 路由视界 桌面监控\n'
+                       'Exec=%s\n'
+                       'Icon=routersight\n'
+                       'Terminal=false\n'
+                       'StartupNotify=false\n'
+                       'X-GNOME-Autostart-enabled=true\n' % exec_line)
+            with open(desktop_path, 'w', encoding='utf-8') as handle:
+                handle.write(content)
+            os.chmod(desktop_path, 0o644)
+        except Exception:
+            pass
+
     def set_auto_start(self, enabled):
+        if is_linux():
+            self._set_auto_start_linux(enabled)
+            return
         if sys.platform == 'win32':
             try:
                 import winreg
@@ -3534,7 +3828,7 @@ def run_self_test():
     log('时间: ' + time.strftime('%Y-%m-%d %H:%M:%S'))
     log('frozen: ' + str(getattr(sys, 'frozen', False)))
     log('executable: ' + sys.executable)
-    base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+    base_dir = writable_base_dir()
     log('directory: ' + base_dir)
     rc = 1
     try:

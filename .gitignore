@@ -12,6 +12,12 @@ dirdist/
 build_*/
 *.spec
 
+# Linux / AppImage 打包产物
+dist_linux/
+.tools/
+.tmp/
+*.AppImage
+
 # 运行期产物
 RouterSight_selftest.txt
 RouterSight_config.ini
@@ -22,6 +28,7 @@ NetSight_config.ini
 # 离屏渲染的临时图（docs/ 里的已提交）
 ui_*.png
 widget_*.png
+dialog_preview.png
 crop_*.png
 icon_sheet_new.png
 

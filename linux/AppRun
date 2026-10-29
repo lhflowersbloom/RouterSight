@@ -1,0 +1,56 @@
+#!/bin/sh
+# AppImage 入口脚本：$APPDIR 指向只读挂载点，由 AppImage runtime 注入。
+# 配置读写走 $APPIMAGE 所在目录（见 RouterSight.py 的 app_base_dir），不写挂载点。
+
+HERE="$(dirname "$(readlink -f "$0")")"
+
+# ---- 预检：Qt 的 xcb 平台插件依赖若干系统库，老发行版常见缺失 ------------------
+# 不把这些库打进 AppImage，是因为它们在不同发行版上与 glibc 强绑定，
+# 硬塞进来会让老系统直接报 "GLIBC_2.xx not found"，比缺库更难排查。
+PLUGIN=""
+for candidate in \
+    "$HERE/usr/lib/routersight/_internal/PyQt5/Qt5/plugins/platforms/libqxcb.so" \
+    "$HERE/usr/lib/routersight/PyQt5/Qt5/plugins/platforms/libqxcb.so"
+do
+    if [ -f "$candidate" ]; then PLUGIN="$candidate"; break; fi
+done
+
+if [ -n "$PLUGIN" ] && command -v ldd >/dev/null 2>&1; then
+    MISSING=$(ldd "$PLUGIN" 2>/dev/null | awk '/not found/{print $1}' | sort -u | tr '\n' ' ')
+    if [ -n "$MISSING" ]; then
+        echo "RouterSight: 缺少 Qt 运行所需的系统库:" >&2
+        echo "             $MISSING" >&2
+        echo "" >&2
+        echo "  Debian / Ubuntu:" >&2
+        echo "    sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 \\" >&2
+        echo "        libxcb-keysyms1 libxcb-render-util0 libxcb-image0 libxcb-randr0 \\" >&2
+        echo "        libxcb-shape0 libxcb-xinerama0 libxcb-xkb1" >&2
+        echo "  Fedora:" >&2
+        echo "    sudo dnf install xcb-util-cursor libxkbcommon-x11 xcb-util-wm \\" >&2
+        echo "        xcb-util-keysyms xcb-util-renderutil xcb-util-image" >&2
+        echo "  Arch:" >&2
+        echo "    sudo pacman -S xcb-util-cursor libxkbcommon-x11 xcb-util-wm xcb-util-keysyms \\" >&2
+        echo "        xcb-util-renderutil xcb-util-image" >&2
+        exit 1
+    fi
+fi
+
+# ---- 图形平台：优先 xcb ---------------------------------------------------------
+# 组件的核心是"贴屏幕边缘停靠"，而 Wayland 不允许客户端设置窗口绝对坐标，
+# 靠边隐藏会失效；因此有 X11 时统一走 xcb（Wayland 桌面由 XWayland 承接）。
+# 想强制用 Wayland 原生：ROUTERSIGHT_KEEP_QT_PLATFORM=1 ./RouterSight*.AppImage
+if [ -z "$ROUTERSIGHT_KEEP_QT_PLATFORM" ] && [ -n "$DISPLAY" ] && [ -z "$QT_QPA_PLATFORM" ]; then
+    export QT_QPA_PLATFORM=xcb
+fi
+
+if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    if [ "$1" = "--selftest" ]; then
+        :   # 无界面自检，照常放行
+    else
+        echo "RouterSight: 未检测到图形环境 (DISPLAY/WAYLAND_DISPLAY 均为空)。" >&2
+        echo "             请在桌面会话中运行，或用 --selftest 做无界面自检。" >&2
+        exit 1
+    fi
+fi
+
+exec "$HERE/usr/bin/RouterSight" "$@"

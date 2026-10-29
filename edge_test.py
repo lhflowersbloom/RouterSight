@@ -8,7 +8,9 @@ import ctypes
 import os
 import sys
 
-os.environ.setdefault('QT_QPA_FONTDIR', r'C:\Windows\Fonts')
+# Windows 下离屏渲染要显式指字体目录才画得出字；Linux 交给 fontconfig
+if sys.platform == 'win32':
+    os.environ.setdefault('QT_QPA_FONTDIR', r'C:\Windows\Fonts')
 from PyQt5.QtCore import Qt  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
