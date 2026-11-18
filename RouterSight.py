@@ -82,20 +82,9 @@ if sys.stdout is not None:
 
 
 # ------------------------------------------------------------------ 平台适配
-# Windows 走原有逻辑；Linux（AppImage）下资源目录、字体与系统集成都需要换一套做法。
-
-def is_linux():
-    return sys.platform.startswith('linux')
-
 
 def app_base_dir():
-    '''数据目录：Windows 为 exe 同目录；AppImage 为 .AppImage 文件所在目录。
-
-    AppImage 运行时 sys.executable 指向只读挂载点 (/tmp/.mount_*/usr/bin)，
-    配置写在那里重启即丢，所以改用 $APPIMAGE 的父目录，保持"绿色版"体验。
-    '''
-    if is_linux() and os.environ.get('APPIMAGE'):
-        return os.path.dirname(os.path.abspath(os.environ['APPIMAGE']))
+    '''数据目录：打包后为 exe 同目录，源码运行时为脚本所在目录。'''
     if getattr(sys, 'frozen', False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.abspath(__file__))
@@ -117,30 +106,9 @@ def writable_base_dir():
     return fallback
 
 
-_FONT_FAMILY_CACHE = {}
-
-
 def ui_font_family():
-    '''界面字体：Windows 用微软雅黑，Linux 按 fontconfig 的实际可用字体挑一个 CJK 字体。'''
-    if not is_linux():
-        return '微软雅黑'
-    cached = _FONT_FAMILY_CACHE.get('family')
-    if cached:
-        return cached
-    family = 'Noto Sans CJK SC'
-    try:
-        from PyQt5.QtGui import QFontDatabase
-        available = set(QFontDatabase().families())
-        for name in ('Noto Sans CJK SC', 'Source Han Sans SC', 'Noto Sans SC',
-                     'Sarasa Gothic SC', 'WenQuanYi Micro Hei', 'Droid Sans Fallback',
-                     'DejaVu Sans'):
-            if name in available:
-                family = name
-                break
-    except Exception:
-        pass
-    _FONT_FAMILY_CACHE['family'] = family
-    return family
+    '''界面字体：Windows 使用微软雅黑。'''
+    return '微软雅黑'
 
 
 def ui_font(size, weight=QFont.Normal):
@@ -151,9 +119,8 @@ def ui_font_px(pixel_size, weight=QFont.Normal):
     '''按像素字号建字体。
 
     卡片是按固定像素设计的（默认 250x120），而"点"字号会随屏幕 DPI 放大，
-    X11 上 Xft.dpi 一改，文字就撑破卡片、标题与数值叠在一起。
     改用像素字号后，组件尺寸和文字排版都不再受 DPI 影响，
-    保持与 Windows 100% 缩放时一致的观感。
+    保持与 100% 缩放时一致的观感。
     '''
     font = QFont(ui_font_family())
     font.setPixelSize(max(1, int(pixel_size)))
@@ -2749,10 +2716,6 @@ class RouterWidget(QWidget):
                 if sys.platform == 'win32':
                     os.startfile(clean_link)
                     return
-                if sys.platform == 'darwin':
-                    subprocess.Popen(['open', clean_link])
-                    return
-                subprocess.Popen(['xdg-open', clean_link])
                 return
             if clean_link:
                 if not os.path.isfile(clean_link):
@@ -2760,16 +2723,11 @@ class RouterWidget(QWidget):
                         if sys.platform == 'win32':
                             os.startfile(clean_link)
                             return
-                        subprocess.Popen([clean_link])
                         return
             if clean_link:
                 if sys.platform == 'win32':
                     os.system(f'start {clean_link}')
                     return
-                if sys.platform == 'darwin':
-                    subprocess.Popen(['open', '-a', clean_link])
-                    return
-                subprocess.Popen([clean_link])
                 return
         except Exception as e:
             QMessageBox.warning(self, '错误', f'无法打开链接: {clean_link}\n错误: {str(e)}')
@@ -3445,23 +3403,11 @@ class RouterWidget(QWidget):
         return self._get_config_value('card_radius', int)
 
     def get_ui_scale(self):
-        '''整体缩放系数（配置项 ui_scale，单位 %，0 表示自动）。
-
-        桌面小部件不该像常规窗口那样整倍跟随系统缩放，否则高分屏上大得离谱；
-        自动模式取桌面缩放比例的 70%，并限制在 100%~160% 之间。
-        Windows 上恒为 1.0，保持原样。
-        '''
+        '''整体缩放系数（配置项 ui_scale，单位 %，0 表示自动，Windows 上保持 1.0）。'''
         override = self._get_config_value('ui_scale', int, 0)
         if override and override > 0:
             return max(0.5, min(2.5, override / 100.0))
-        if not is_linux():
-            return 1.0
-        try:
-            screen = self.screen() or QApplication.primaryScreen()
-            dpi = screen.logicalDotsPerInch() if screen is not None else 96.0
-        except Exception:
-            dpi = 96.0
-        return max(1.0, min(1.6, (dpi / 96.0) * 0.7))
+        return 1.0
 
     def get_widget_width(self):
         return int(round(self._get_config_value('widget_width', int) * self.get_ui_scale()))
@@ -3532,21 +3478,6 @@ class RouterWidget(QWidget):
         '''
         if enabled is None:
             enabled = self.is_click_through()
-        if is_linux():
-            # Linux 用 Qt 的 WindowTransparentForInput 标志实现，需重建窗口才生效；
-            # 重建会丢失位置，所以先记下几何信息再恢复。Wayland 下部分合成器不支持。
-            try:
-                was_visible = self.isVisible()
-                geo = self.geometry()
-                self.setWindowFlag(Qt.WindowTransparentForInput, bool(enabled))
-                if was_visible:
-                    self.setGeometry(geo)
-                    self.show()
-                    self.setGeometry(geo)
-                self._click_through_applied = bool(enabled)
-            except Exception:
-                pass
-            return
         if os.name != 'nt':
             return
         try:
@@ -3759,40 +3690,7 @@ class RouterWidget(QWidget):
                     action.setText(new_text)
                     return
 
-    def _set_auto_start_linux(self, enabled):
-        '''XDG 自启动：写 ~/.config/autostart/routersight.desktop，等价于 Windows 的 Run 键。'''
-        autostart_dir = os.path.join(os.path.expanduser('~'), '.config', 'autostart')
-        desktop_path = os.path.join(autostart_dir, 'routersight.desktop')
-        try:
-            if not enabled:
-                if os.path.exists(desktop_path):
-                    os.remove(desktop_path)
-                return
-            if getattr(sys, 'frozen', False):
-                parts = [os.environ.get('APPIMAGE') or os.path.abspath(sys.executable)]
-            else:
-                parts = [os.path.abspath(sys.executable), os.path.abspath(sys.argv[0])]
-            exec_line = ' '.join(('"%s"' % part) if ' ' in part else part for part in parts)
-            os.makedirs(autostart_dir, exist_ok=True)
-            content = ('[Desktop Entry]\n'
-                       'Type=Application\n'
-                       'Name=RouterSight\n'
-                       'Comment=RouterSight 路由视界 桌面监控\n'
-                       'Exec=%s\n'
-                       'Icon=routersight\n'
-                       'Terminal=false\n'
-                       'StartupNotify=false\n'
-                       'X-GNOME-Autostart-enabled=true\n' % exec_line)
-            with open(desktop_path, 'w', encoding='utf-8') as handle:
-                handle.write(content)
-            os.chmod(desktop_path, 0o644)
-        except Exception:
-            pass
-
     def set_auto_start(self, enabled):
-        if is_linux():
-            self._set_auto_start_linux(enabled)
-            return
         if sys.platform == 'win32':
             try:
                 import winreg

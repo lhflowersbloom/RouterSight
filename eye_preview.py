@@ -4,7 +4,7 @@ import os
 import sys
 
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
-# Windows 下离屏渲染要显式指字体目录才画得出字；Linux 交给 fontconfig
+# Windows 下离屏渲染要显式指字体目录才画得出字
 if sys.platform == 'win32':
     os.environ['QT_QPA_FONTDIR'] = r'C:\Windows\Fonts'
 
